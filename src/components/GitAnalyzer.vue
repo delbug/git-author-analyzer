@@ -1,5 +1,5 @@
 <template>
-  <div class="git-analyzer p-6 max-w-4xl mx-auto">
+  <div class="git-analyzer p-6 mx-auto">
     <h1 class="text-2xl font-bold text-center mb-8 text-gray-800">
       <el-icon class="mr-2"><Files /></el-icon>
       Git 导出器
@@ -17,7 +17,9 @@
         <el-select
           v-model="selectedConfigIndex"
           placeholder="选择上次配置"
-          class="flex-1"
+          class="flex-1 min-w-0"
+          fit-input-width
+          popper-class="app-select-dropdown"
           clearable
           @change="applyConfig"
         >
@@ -30,6 +32,14 @@
         </el-select>
         <el-button size="small" type="info" @click="saveCurrentAsConfig">
           保存当前为配置
+        </el-button>
+        <el-button
+          size="small"
+          :icon="EditPen"
+          :disabled="selectedConfigIndex === null"
+          @click="renameSelectedConfig"
+        >
+          重命名
         </el-button>
       </div>
     </el-card>
@@ -47,7 +57,7 @@
           v-model="projectPath"
           placeholder="输入或选择本地 Git 项目目录"
           clearable
-          class="flex-1"
+          class="flex-1 min-w-0"
         >
           <template #prefix>
             <el-icon><Monitor /></el-icon>
@@ -60,6 +70,50 @@
           {{ loading ? '加载中...' : '加载作者' }}
         </el-button>
       </div>
+
+      <div class="mt-3 flex gap-3 items-center">
+        <el-select
+          v-model="selectedSavedProjectPath"
+          placeholder="选择已保存的项目路径"
+          class="flex-1 min-w-0"
+          fit-input-width
+          popper-class="app-select-dropdown project-path-select"
+          clearable
+          @change="applySavedProjectPath"
+        >
+          <el-option
+            v-for="path in savedProjectPaths"
+            :key="path"
+            :label="getProjectPathLabel(path)"
+            :value="path"
+          >
+            <div class="project-path-row">
+              <span class="project-path-text" :title="path">{{ getProjectPathLabel(path) }}</span>
+              <el-icon
+                class="project-path-delete"
+                @click.stop="removeSavedProjectPath(path)"
+              >
+                <Close />
+              </el-icon>
+            </div>
+          </el-option>
+          <template v-if="savedProjectPaths.length" #footer>
+            <div class="project-path-footer">
+              <el-button text type="danger" size="small" @click="clearAllProjectPaths">
+                清空全部
+              </el-button>
+            </div>
+          </template>
+        </el-select>
+        <el-button
+          type="primary"
+          plain
+          :disabled="!projectPath.trim() || isProjectPathSaved(projectPath)"
+          @click="saveCurrentProjectPath"
+        >
+          保存路径
+        </el-button>
+      </div>
     </el-card>
 
     <!-- 作者选择 -->
@@ -69,8 +123,8 @@
           <div class="flex items-center">
             <el-icon><User /></el-icon>
             <span class="ml-2 font-medium">选择作者</span>
-            <el-tag v-if="selectedAuthors.length" type="primary" size="small" class="ml-2">
-              已选 {{ selectedAuthors.length }}/{{ authors.length }}
+            <el-tag type="primary" size="small" class="ml-2">
+              {{ selectedAuthors.length ? `已选 ${selectedAuthors.length}/${authors.length}` : '全部作者' }}
             </el-tag>
           </div>
           <div>
@@ -85,11 +139,16 @@
         v-model="selectedAuthorUids"
         multiple
         filterable
+        collapse-tags
+        collapse-tags-tooltip
+        :max-collapse-tags="3"
+        fit-input-width
+        popper-class="app-select-dropdown"
         reserve-keyword
         filter-method="filterAuthors"
         remote
         :remote-method="filterAuthors"
-        placeholder="输入作者名称搜索，点击添加到已选"
+        placeholder="未选择 = 全部作者；输入名称搜索并添加特定作者"
         class="w-full mb-3"
         clearable
         @change="handleAuthorChange"
@@ -100,18 +159,25 @@
           :label="`${author.name}(${author.email})`"
           :value="author._uid"
         >
-          <div class="flex items-center justify-between">
-            <div class="flex items-center">
-              <span class="mr-2">{{ isSelectedByUid(author._uid) ? '✅' : '⬜' }}</span>
-              <span>{{ author.name}}({{ author.email }})</span>
+          <div class="author-option">
+            <div class="author-option-main">
+              <span class="author-option-check">{{ isSelectedByUid(author._uid) ? '✅' : '⬜' }}</span>
+              <span class="author-option-text">{{ author.name}}({{ author.email }})</span>
             </div>
-            <el-tag size="small">{{ author.count }} commits</el-tag>
+            <el-tag size="small" class="author-option-tag">{{ author.count }} commits</el-tag>
           </div>
         </el-option>
       </el-select>
 
+      <p v-if="!selectedAuthors.length" class="text-sm text-gray-500 mb-2">
+        当前未选择特定作者，将包含全部 {{ authors.length }} 位作者的提交
+      </p>
+
       <!-- 已选作者标签（可滚动） -->
-      <div v-if="selectedAuthors.length" class="max-h-40 overflow-y-auto">
+      <div v-if="selectedAuthors.length" class="author-tags-scroll">
+        <div class="text-xs text-gray-400 mb-1.5">
+          已选 {{ selectedAuthors.length }} 位作者，可滚动查看
+        </div>
         <el-tag
           v-for="a in selectedAuthors"
           :key="a._uid"
@@ -202,7 +268,7 @@
         <el-col :span="12">
           <el-form label-position="top" size="default">
             <el-form-item label="导出格式">
-              <el-select v-model="exportFormat" class="w-full">
+              <el-select v-model="exportFormat" class="w-full" fit-input-width popper-class="app-select-dropdown">
                 <el-option label="TXT 文本" value="txt" />
                 <el-option label="CSV 表格" value="csv" />
                 <el-option label="JSON 数据" value="json" />
@@ -210,7 +276,7 @@
               </el-select>
             </el-form-item>
             <el-form-item label="导出模板">
-              <el-select v-model="exportTemplate" class="w-full">
+              <el-select v-model="exportTemplate" class="w-full" fit-input-width popper-class="app-select-dropdown">
                 <el-option label="完整版（含作者信息）" value="full" />
                 <el-option label="精简版（仅提交记录）" value="compact" />
               </el-select>
@@ -222,6 +288,30 @@
         </el-col>
         <el-col :span="12">
           <el-form label-position="top" size="default">
+            <el-form-item label="文件名称">
+              <el-input
+                v-model="exportFilename"
+                placeholder="预览数据后自动生成，可修改"
+                :disabled="!previewCommits.length"
+                clearable
+                @input="filenameEdited = true"
+              >
+                <template #append>
+                  <el-button
+                    :disabled="!previewCommits.length"
+                    @click="resetExportFilename"
+                  >
+                    重置
+                  </el-button>
+                </template>
+              </el-input>
+              <p v-if="!previewCommits.length" class="text-xs text-gray-400 mt-1">
+                请先预览数据，系统将自动生成文件名
+              </p>
+              <p v-else-if="exportFullPathPreview" class="text-xs text-gray-400 mt-1">
+                保存路径：{{ exportFullPathPreview }}
+              </p>
+            </el-form-item>
             <el-form-item label="导出目录">
               <div class="flex gap-2">
                 <el-input
@@ -248,7 +338,7 @@
       <el-button
         type="warning"
         size="large"
-        :disabled="selectedAuthors.length === 0 || !hasValidDateFilter()"
+        :disabled="!hasValidDateFilter() && !incrementalExport"
         :loading="previewLoading"
         :icon="Document"
         @click="previewData"
@@ -258,7 +348,7 @@
       <el-button
         type="primary"
         size="large"
-        :disabled="selectedAuthors.length === 0 || !hasValidDateFilter() || !previewCommits.length"
+        :disabled="(!hasValidDateFilter() && !incrementalExport) || !previewCommits.length || !exportFilename.trim()"
         :icon="Download"
         @click="exportData"
       >
@@ -315,6 +405,16 @@
             <div class="text-xs text-gray-400 mt-1">
               {{ record.author_count }} 作者 · {{ record.commit_count }} 提交 · {{ record.project_path }}
             </div>
+            <div v-if="record.file_path" class="text-xs mt-1">
+              <span
+                class="text-blue-500 cursor-pointer hover:underline inline-flex items-center gap-0.5"
+                :title="record.file_path"
+                @click="openRecordDirectory(record)"
+              >
+                <el-icon><Folder /></el-icon>
+                {{ getDirFromFilePath(record.file_path) }}
+              </span>
+            </div>
           </el-card>
         </el-timeline-item>
       </el-timeline>
@@ -345,14 +445,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   Files, FolderOpened, Monitor, Search, Refresh,
   User, Calendar, Setting, Document, Download,
   Delete, Plus, Clock, Folder,
-  CircleCheckFilled, Collection,
+  CircleCheckFilled, Collection, EditPen, Close,
 } from '@element-plus/icons-vue';
 
 interface Author {
@@ -383,9 +484,12 @@ interface ExportRecord {
   author_count: number;
   commit_count: number;
   incremental: boolean;
+  file_path?: string;
 }
 
 const projectPath = ref('');
+const savedProjectPaths = ref<string[]>([]);
+const selectedSavedProjectPath = ref('');
 const authors = ref<Author[]>([]);
 const selectedAuthors = ref<Author[]>([]);
 const selectedAuthorUids = ref<string[]>([]);
@@ -401,6 +505,8 @@ const exportTemplate = ref<'full' | 'compact'>('full');
 const incrementalExport = ref(false);
 const exportHistory = ref<ExportRecord[]>([]);
 const exportDir = ref('');
+const exportFilename = ref('');
+const filenameEdited = ref(false);
 
 const appVersion = ref('');
 
@@ -431,6 +537,16 @@ const formatLabel = computed(() => {
   return map[exportFormat.value] || exportFormat.value.toUpperCase();
 });
 
+const exportFullPathPreview = computed(() => {
+  const filename = sanitizeFilename(exportFilename.value);
+  if (!filename) return '';
+  if (exportDir.value) {
+    const dir = exportDir.value.replace(/\/+$/, '');
+    return `${dir}/${filename}`;
+  }
+  return filename;
+});
+
 const formatTagType = (fmt: string) => {
   const map: Record<string, 'success' | 'primary' | 'warning' | 'info'> = {
     txt: 'info', csv: 'success', json: 'primary', md: 'warning'
@@ -454,6 +570,24 @@ onMounted(async () => {
   }
   // 加载保存的配置列表
   loadSavedConfigs();
+  loadSavedProjectPaths();
+});
+
+watch(exportFormat, () => {
+  if (!exportFilename.value) return;
+  if (!filenameEdited.value) {
+    resetExportFilename();
+    return;
+  }
+  const base = exportFilename.value.replace(/\.[^.]+$/, '');
+  exportFilename.value = `${base}.${exportFormat.value}`;
+});
+
+watch(() => previewCommits.value.length, (len) => {
+  if (len === 0) {
+    exportFilename.value = '';
+    filenameEdited.value = false;
+  }
 });
 
 // 加载配置列表
@@ -473,10 +607,119 @@ function saveConfigsList() {
   localStorage.setItem('git-analyzer-configs', JSON.stringify(savedConfigs.value));
 }
 
+const PROJECT_PATHS_KEY = 'git-analyzer-project-paths';
+const MAX_SAVED_PROJECT_PATHS = 20;
+
+function loadSavedProjectPaths() {
+  try {
+    const raw = localStorage.getItem(PROJECT_PATHS_KEY);
+    if (raw) {
+      savedProjectPaths.value = JSON.parse(raw);
+    }
+  } catch (e) {
+    console.error('加载项目路径失败:', e);
+  }
+}
+
+function saveProjectPathsList() {
+  localStorage.setItem(PROJECT_PATHS_KEY, JSON.stringify(savedProjectPaths.value));
+}
+
+function normalizeProjectPath(path: string): string {
+  return path.trim().replace(/\/+$/, '');
+}
+
+function getProjectPathLabel(path: string): string {
+  const normalized = normalizeProjectPath(path);
+  const name = normalized.split('/').filter(Boolean).pop();
+  return name || normalized;
+}
+
+function isProjectPathSaved(path: string): boolean {
+  const normalized = normalizeProjectPath(path);
+  return savedProjectPaths.value.some(p => normalizeProjectPath(p) === normalized);
+}
+
+function saveCurrentProjectPath() {
+  const path = normalizeProjectPath(projectPath.value);
+  if (!path) return;
+  if (isProjectPathSaved(path)) {
+    ElMessage.warning('该路径已保存');
+    return;
+  }
+  savedProjectPaths.value.unshift(path);
+  if (savedProjectPaths.value.length > MAX_SAVED_PROJECT_PATHS) {
+    savedProjectPaths.value = savedProjectPaths.value.slice(0, MAX_SAVED_PROJECT_PATHS);
+  }
+  projectPath.value = path;
+  selectedSavedProjectPath.value = path;
+  saveProjectPathsList();
+  ElMessage.success('项目路径已保存');
+}
+
+function applySavedProjectPath(path: string | null) {
+  if (!path) return;
+  projectPath.value = path;
+  selectedSavedProjectPath.value = path;
+}
+
+function removeSavedProjectPath(path: string) {
+  savedProjectPaths.value = savedProjectPaths.value.filter(p => p !== path);
+  if (selectedSavedProjectPath.value === path) {
+    selectedSavedProjectPath.value = '';
+  }
+  saveProjectPathsList();
+}
+
+async function clearAllProjectPaths() {
+  if (savedProjectPaths.value.length === 0) return;
+  try {
+    await ElMessageBox.confirm(
+      `确定清空全部 ${savedProjectPaths.value.length} 个已保存的项目路径？`,
+      '清空全部',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    );
+    savedProjectPaths.value = [];
+    selectedSavedProjectPath.value = '';
+    saveProjectPathsList();
+    ElMessage.success('已清空全部项目路径');
+  } catch {
+    // 用户取消
+  }
+}
+
+watch(projectPath, (path) => {
+  const normalized = normalizeProjectPath(path);
+  if (!normalized) {
+    selectedSavedProjectPath.value = '';
+    return;
+  }
+  const matched = savedProjectPaths.value.find(p => normalizeProjectPath(p) === normalized);
+  selectedSavedProjectPath.value = matched || '';
+});
+
 // 保存当前为配置
-function saveCurrentAsConfig() {
+async function saveCurrentAsConfig() {
+  const defaultLabel = `${projectPath.value.split('/').filter(Boolean).pop() || '项目'} - ${new Date().toLocaleDateString('zh-CN')}`;
+  let label: string;
+  try {
+    const { value } = await ElMessageBox.prompt('请输入配置名称', '保存配置', {
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValue: defaultLabel,
+      inputValidator: (val) => (val?.trim() ? true : '名称不能为空'),
+    });
+    label = value.trim();
+  } catch {
+    return;
+  }
+
   const config: SavedConfig = {
-    label: `${projectPath.value.split('/').filter(Boolean).pop() || '项目'} - ${new Date().toLocaleDateString('zh-CN')}`,
+    label,
     project_path: projectPath.value,
     selected_author_uids: [...selectedAuthorUids.value],
     date_mode: dateMode.value,
@@ -491,8 +734,28 @@ function saveCurrentAsConfig() {
   if (savedConfigs.value.length > 20) {
     savedConfigs.value = savedConfigs.value.slice(0, 20);
   }
+  selectedConfigIndex.value = 0;
   saveConfigsList();
-  alert('配置已保存！下次打开时可从下拉列表选择');
+  ElMessage.success('配置已保存');
+}
+
+async function renameSelectedConfig() {
+  if (selectedConfigIndex.value === null) return;
+  const idx = selectedConfigIndex.value;
+  const cfg = savedConfigs.value[idx];
+  try {
+    const { value } = await ElMessageBox.prompt('请输入新的配置名称', '重命名配置', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      inputValue: cfg.label,
+      inputValidator: (val) => (val?.trim() ? true : '名称不能为空'),
+    });
+    savedConfigs.value[idx].label = value.trim();
+    saveConfigsList();
+    ElMessage.success('配置已重命名');
+  } catch {
+    // 用户取消
+  }
 }
 
 // 应用配置
@@ -559,6 +822,16 @@ function hasValidDateFilter(): boolean {
     return !!singleDate.value;
   }
   return dateRanges.value.some(r => r.start && r.end);
+}
+
+function getAuthorEmailsForQuery(): string[] {
+  return selectedAuthors.value.length > 0
+    ? selectedAuthors.value.map(a => a.email)
+    : [];
+}
+
+function getEffectiveAuthorCount(): number {
+  return selectedAuthors.value.length > 0 ? selectedAuthors.value.length : authors.value.length;
 }
 
 const browsePath = async () => {
@@ -640,6 +913,18 @@ function getFilename(baseName: string): string {
   return `git-export-${baseName}-${ts}.${exportFormat.value}`;
 }
 
+function sanitizeFilename(name: string): string {
+  const cleaned = name.replace(/[/\\:*?"<>|]/g, '_').trim();
+  if (!cleaned) return '';
+  return cleaned.includes('.') ? cleaned : `${cleaned}.${exportFormat.value}`;
+}
+
+function resetExportFilename() {
+  filenameEdited.value = false;
+  const baseName = projectPath.value.split('/').filter(Boolean).pop() || 'repo';
+  exportFilename.value = getFilename(baseName);
+}
+
 function fmtDate(iso: string): string {
   const d = new Date(iso);
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
@@ -683,9 +968,13 @@ function buildReportContent(commits: GitCommit[], format: string, template: stri
     ``,
     `选定的作者:`,
   ];
-  selectedAuthors.value.forEach(author => {
-    headerLines.push(`- ${author.name} <${author.email}> (共${author.count}次提交)`);
-  });
+  if (selectedAuthors.value.length === 0) {
+    headerLines.push(`- 全部作者 (共 ${authors.value.length} 人)`);
+  } else {
+    selectedAuthors.value.forEach(author => {
+      headerLines.push(`- ${author.name} <${author.email}> (共${author.count}次提交)`);
+    });
+  }
   headerLines.push(`日期筛选条件:`);
   if (dateMode.value === 'single' && singleDate.value) {
     headerLines.push(`- 单个日期: ${singleDate.value}`);
@@ -716,7 +1005,9 @@ function buildReportContent(commits: GitCommit[], format: string, template: stri
     const data = {
       project_path: projectPath.value,
       generated_at: now,
-      selected_authors: selectedAuthors.value.map(a => ({ name: a.name, email: a.email, total_commits: a.count })),
+      selected_authors: selectedAuthors.value.length > 0
+        ? selectedAuthors.value.map(a => ({ name: a.name, email: a.email, total_commits: a.count }))
+        : authors.value.map(a => ({ name: a.name, email: a.email, total_commits: a.count })),
       date_filters: (() => {
         if (dateMode.value === 'single' && singleDate.value) return [singleDate.value];
         return dateRanges.value.filter(r => r.start && r.end).map(r => ({ start: r.start, end: r.end }));
@@ -738,15 +1029,37 @@ function buildReportContent(commits: GitCommit[], format: string, template: stri
   return '';
 }
 
-async function saveHistoryRecord(filename: string, commitCount: number) {
+function getDirFromFilePath(filePath: string): string {
+  const idx = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
+  return idx >= 0 ? filePath.slice(0, idx) : filePath;
+}
+
+async function openDirectory(dirPath: string) {
+  if (!dirPath) return;
+  try {
+    await invoke('open_directory', { dirPath });
+  } catch (e) {
+    console.error('打开目录失败:', e);
+    alert(`打开目录失败: ${e}`);
+  }
+}
+
+function openRecordDirectory(record: ExportRecord) {
+  if (record.file_path) {
+    openDirectory(getDirFromFilePath(record.file_path));
+  }
+}
+
+async function saveHistoryRecord(filename: string, commitCount: number, filePath: string) {
   const record: ExportRecord = {
     timestamp: new Date().toLocaleString('zh-CN'),
     project_path: projectPath.value,
     filename,
     format: exportFormat.value,
-    author_count: selectedAuthors.value.length,
+    author_count: getEffectiveAuthorCount(),
     commit_count: commitCount,
     incremental: incrementalExport.value,
+    file_path: filePath,
   };
   try {
     await invoke('save_export_record', { record });
@@ -768,11 +1081,6 @@ const clearHistory = async () => {
 
 // 预览：拉取数据但不导出
 const previewData = async () => {
-  if (selectedAuthors.value.length === 0) {
-    alert('请至少选择一个作者');
-    return;
-  }
-
   const apiDateRanges: {start: string | null, end: string | null}[] = [];
   if (dateMode.value === 'single' && singleDate.value) {
     apiDateRanges.push({ start: singleDate.value, end: singleDate.value });
@@ -789,7 +1097,7 @@ const previewData = async () => {
 
   previewLoading.value = true;
   try {
-    const authorEmails = selectedAuthors.value.map(a => a.email);
+    const authorEmails = getAuthorEmailsForQuery();
     let commits: GitCommit[];
 
     if (incrementalExport.value) {
@@ -815,6 +1123,7 @@ const previewData = async () => {
     }
 
     previewCommits.value = commits;
+    resetExportFilename();
   } catch (error) {
     console.error('预览失败:', error);
     alert(`预览失败: ${error}`);
@@ -824,29 +1133,26 @@ const previewData = async () => {
 };
 
 const exportData = async () => {
-  if (selectedAuthors.value.length === 0) {
-    alert('请至少选择一个作者');
-    return;
-  }
-
   if (!previewCommits.value.length) {
     alert('请先点击"预览数据"加载提交记录');
     return;
   }
 
+  const filename = sanitizeFilename(exportFilename.value);
+  if (!filename) {
+    alert('请输入有效的文件名称');
+    return;
+  }
+
   try {
-    const baseName = projectPath.value.split('/').filter(Boolean).pop() || 'repo';
-    const filename = getFilename(baseName);
     const content = buildReportContent(previewCommits.value, exportFormat.value, exportTemplate.value);
 
     let filePath: string | null;
     if (exportDir.value) {
-      // 用户指定了导出目录，通过 Rust 后端写入
       const fullPath = exportDir.value.endsWith('/') ? exportDir.value + filename : exportDir.value + '/' + filename;
       filePath = fullPath;
       await invoke('write_export_file', { path: fullPath, content });
     } else {
-      // 未指定目录，弹出保存对话框
       const chosenPath = await save({
         filters: [{
           name: exportFormat.value.toUpperCase(),
@@ -861,10 +1167,10 @@ const exportData = async () => {
     }
 
     if (filePath) {
-      await saveHistoryRecord(filename, previewCommits.value.length);
+      await saveHistoryRecord(filename, previewCommits.value.length, filePath);
 
       successFilePath.value = filePath;
-      successDirPath.value = exportDir.value || (typeof filePath === 'string' ? filePath.substring(0, filePath.lastIndexOf('/')) : '');
+      successDirPath.value = exportDir.value || getDirFromFilePath(filePath);
       showSuccessDialog.value = true;
     }
   } catch (error) {
@@ -874,14 +1180,7 @@ const exportData = async () => {
 };
 
 const handleOpenDirectory = async () => {
-  if (successDirPath.value) {
-    try {
-      await invoke('open_directory', { dirPath: successDirPath.value });
-    } catch (e) {
-      console.error('打开目录失败:', e);
-      alert(`打开目录失败: ${e}`);
-    }
-  }
+  await openDirectory(successDirPath.value);
   showSuccessDialog.value = false;
 };
 </script>
@@ -889,7 +1188,41 @@ const handleOpenDirectory = async () => {
 <style scoped>
 .git-analyzer {
   min-height: 100vh;
+  min-width: 600px;
+  max-width: 1000px;
+  width: 100%;
+  overflow-x: hidden;
   background: linear-gradient(135deg, #f5f7fa 0%, #e4e9f2 100%);
+}
+.git-analyzer :deep(.el-select) {
+  width: 100%;
+}
+.author-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+.author-option-main {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+}
+.author-option-check {
+  flex-shrink: 0;
+  margin-right: 8px;
+}
+.author-option-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.author-option-tag {
+  flex-shrink: 0;
 }
 .el-card {
   border-radius: 12px;
@@ -897,5 +1230,76 @@ const handleOpenDirectory = async () => {
 .el-card :deep(.el-card__header) {
   padding: 12px 16px;
   background: #fafafa;
+}
+.author-tags-scroll {
+  max-height: 200px;
+  overflow-y: auto;
+  margin-top: 4px;
+  padding: 10px 12px;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  background: #fafafa;
+}
+.author-tags-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.author-tags-scroll::-webkit-scrollbar-thumb {
+  background: #c0c4cc;
+  border-radius: 3px;
+}
+.author-tags-scroll::-webkit-scrollbar-thumb:hover {
+  background: #909399;
+}
+</style>
+
+<style>
+.app-select-dropdown.el-popper {
+  box-sizing: border-box;
+}
+.app-select-dropdown .el-select-dropdown__wrap {
+  max-width: 100%;
+}
+.app-select-dropdown .el-select-dropdown__item {
+  overflow: hidden;
+}
+.app-select-dropdown .el-select-dropdown__item > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-path-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+.project-path-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-path-delete {
+  flex-shrink: 0;
+  color: #909399;
+  font-size: 14px;
+  padding: 2px;
+  border-radius: 4px;
+}
+.project-path-delete:hover {
+  color: #f56c6c;
+  background: #fef0f0;
+}
+.project-path-footer {
+  padding: 4px 8px;
+  border-top: 1px solid #ebeef5;
+  text-align: center;
+}
+.project-path-select .el-select-dropdown__item {
+  padding-right: 8px;
 }
 </style>

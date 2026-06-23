@@ -35,6 +35,8 @@ pub struct ExportRecord {
     pub author_count: usize,
     pub commit_count: usize,
     pub incremental: bool,
+    #[serde(default)]
+    pub file_path: String,
 }
 
 #[tauri::command]
